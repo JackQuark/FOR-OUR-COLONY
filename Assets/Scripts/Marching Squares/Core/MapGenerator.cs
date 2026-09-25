@@ -1,7 +1,5 @@
 ﻿using System.Collections;
-using System.Collections.Generic;
 using System.IO;
-using System.Threading.Tasks;
 using UnityEngine;
 
 public class MapGenerator : MonoBehaviour {
@@ -29,21 +27,11 @@ public class MapGenerator : MonoBehaviour {
 	public int seed;
 	public bool autoRefreshNoise;
 
-	[Header ("Brush settings")]
-	public bool useBrush;
-	public float brushWorldRadius;
-	public Vector2 brushMinMax = new Vector2 (0.5f, 1);
-	public float brushStrength;
-	public Transform brush;
-	public float brushRadiusInputSensitivity;
-	float targetBrushRadius;
 	public TextAsset loadFile;
 	public bool loadOnStart;
 
 	float[, ] fullMap;
 	Chunk[, ] chunks;
-
-	Vector2 brushPosLastFrame;
 
 	void Start () {
 		Init ();
@@ -74,8 +62,6 @@ public class MapGenerator : MonoBehaviour {
 	}
 
 	void Init () {
-
-		targetBrushRadius = brushWorldRadius;
 
 		int totalNumCellsX = numChunksX * (chunkResolution - 1) + 1;
 		int totalNumCellsY = numChunksY * (chunkResolution - 1) + 1;
@@ -108,141 +94,10 @@ public class MapGenerator : MonoBehaviour {
 	}
 
 	void Update () {
-		HandleBrush ();
-
 		if (autoRefreshNoise) {
 			Generate ();
 			DrawChunks ();
 		}
-	}
-
-	void HandleBrush () {
-		brush.gameObject.SetActive (useBrush);
-		if (!useBrush) {
-			return;
-		}
-		targetBrushRadius += Input.GetAxisRaw ("Mouse ScrollWheel") * brushRadiusInputSensitivity;
-		targetBrushRadius = Mathf.Clamp (targetBrushRadius, brushMinMax.x, brushMinMax.y);
-		brushWorldRadius = Mathf.Lerp (brushWorldRadius, targetBrushRadius, Time.deltaTime * 6);
-
-		Vector2 mousePos = InputHelper.MouseWorldPos;
-		brush.position = new Vector3 (mousePos.x, mousePos.y, -1);
-		brush.localScale = Vector3.one * brushWorldRadius * 2;
-
-		bool drawing = Input.GetMouseButton (0);
-
-		if (drawing) {
-			DrawBrushStroke ();
-		}
-
-		brushPosLastFrame = mousePos;
-	}
-
-	void DrawBrushStroke () {
-
-		int totalNumCellsX = fullMap.GetLength (0);
-		int totalNumCellsY = fullMap.GetLength (1);
-
-		float chunkSize = mapWidth / numChunksX;
-		float cellSize = chunkSize / (chunkResolution - 1f);
-		float brushCellRadius = (brushWorldRadius / cellSize);
-
-		bool subtractBrush = InputHelper.AnyOfTheseKeysHeld (KeyCode.LeftAlt, KeyCode.LeftShift);
-		float brushValue = brushStrength * Time.deltaTime * ((subtractBrush) ? 1 : -1);
-
-		Vector2 strokeStartPos = brushPosLastFrame;
-		Vector2 strokeEndPos = brush.transform.position;
-		Vector2Int startCell = CellCoordFromPoint (strokeStartPos);
-		Vector2Int endCell = CellCoordFromPoint (strokeEndPos);
-		Vector2Int[] strokePath = BresenahmLine.GetPath (startCell.x, startCell.y, endCell.x, endCell.y);
-
-		// Draw brush at n points along stroke path
-		for (int i = 0; i < strokePath.Length; i++) {
-
-			int brushCentreX = strokePath[i].x;
-			int brushCentreY = strokePath[i].y;
-
-			// Draw brush
-			for (int brushOffsetY = -(int) brushCellRadius; brushOffsetY <= (int) brushCellRadius; brushOffsetY++) {
-				for (int brushOffsetX = -(int) brushCellRadius; brushOffsetX <= (int) brushCellRadius; brushOffsetX++) {
-					int brushX = brushCentreX + brushOffsetX;
-					int brushY = brushCentreY + brushOffsetY;
-
-					if (brushX >= 0 && brushX < totalNumCellsX && brushY >= 0 && brushY < totalNumCellsY) {
-						if (brushOffsetX * brushOffsetX + brushOffsetY * brushOffsetY <= brushCellRadius * brushCellRadius) {
-							float dstFromCentre = Mathf.Sqrt (brushOffsetX * brushOffsetX + brushOffsetY * brushOffsetY);
-							float falloff = 1 - Mathf.Clamp01 (dstFromCentre / brushCellRadius);
-							float newMapValue = fullMap[brushX, brushY] + brushValue * falloff;
-							fullMap[brushX, brushY] = Mathf.Clamp (newMapValue, iso - isoClamp, iso + isoClamp);
-						}
-					}
-				}
-			}
-		}
-		UpdateChunksUnderStrokeParallel (strokeStartPos, strokeEndPos);
-	}
-
-	Vector2Int CellCoordFromPoint (Vector2 point) {
-		float halfWidth = mapWidth * 0.5f;
-		float halfHeight = halfWidth * numChunksY / (float) numChunksX;
-
-		int cellX = Mathf.RoundToInt (Mathf.InverseLerp (-halfWidth, halfWidth, point.x) * (fullMap.GetLength (0) - 1));
-		int cellY = Mathf.RoundToInt (Mathf.InverseLerp (-halfHeight, halfHeight, point.y) * (fullMap.GetLength (1) - 1));
-		return new Vector2Int (cellX, cellY);
-	}
-
-	void UpdateChunksUnderStrokeParallel (Vector2 strokeStartPos, Vector2 strokeEndPos) {
-		Vector2 strokeDir = (strokeEndPos - strokeStartPos).normalized;
-
-		if (strokeDir == Vector2.zero) {
-			Bounds2D brushBounds = new Bounds2D (strokeStartPos, Vector2.one * brushWorldRadius * 2);
-
-			for (int y = 0; y < numChunksY; y++) {
-				for (int x = 0; x < numChunksX; x++) {
-					Bounds2D bounds = chunks[x, y].bounds;
-					if (brushBounds.OverlapBounds (bounds)) {
-						chunks[x, y].UpdateChunkMeshData (fullMap, iso, smooth);
-					}
-				}
-			}
-		} else {
-			strokeStartPos -= strokeDir * brushWorldRadius;
-			strokeEndPos += strokeDir * brushWorldRadius;
-
-			Vector2 strokeNormal = new Vector2 (-strokeDir.y, strokeDir.x);
-			Vector2 a1 = strokeStartPos + strokeNormal * brushWorldRadius;
-			Vector2 a2 = strokeStartPos - strokeNormal * brushWorldRadius;
-			Vector2 b1 = strokeEndPos + strokeNormal * brushWorldRadius;
-			Vector2 b2 = strokeEndPos - strokeNormal * brushWorldRadius;
-			Bounds2D strokeBounds = new Bounds2D (a1, a2, b1, b2);
-
-			Parallel.For (0, numChunksY * numChunksX, i => UpdateChunkIfInBrushStroke (i, a1, a2, b1, b2, strokeBounds));
-		}
-
-		for (int y = 0; y < numChunksY; y++) {
-			for (int x = 0; x < numChunksX; x++) {
-				chunks[x, y].UpdateMesh ();
-			}
-		}
-	}
-
-	void UpdateChunkIfInBrushStroke (int i, Vector2 a1, Vector2 a2, Vector2 b1, Vector2 b2, Bounds2D strokeBounds) {
-		int x = i % numChunksX;
-		int y = i / numChunksX;
-		Bounds2D bounds = chunks[x, y].bounds;
-		// Check bounds first for quick rejection
-		if (strokeBounds.OverlapBounds (bounds)) {
-			// Check if this chunk's bounds overlap with the rotated rectangle that is the bounds of the stroke
-			// This is done by doing a triangle-triangle intersection test
-			bool t1 = TriangleUtility.TriangleOverlapsTriangle (a1, a2, b1, bounds.topLeft, bounds.bottomLeft, bounds.topRight);
-			bool t2 = TriangleUtility.TriangleOverlapsTriangle (a1, a2, b1, bounds.bottomRight, bounds.bottomLeft, bounds.topRight);
-			bool t3 = TriangleUtility.TriangleOverlapsTriangle (b2, a2, b1, bounds.topLeft, bounds.bottomLeft, bounds.topRight);
-			bool t4 = TriangleUtility.TriangleOverlapsTriangle (b2, a2, b1, bounds.bottomRight, bounds.bottomLeft, bounds.topRight);
-			if (t1 || t2 || t3 || t4) {
-				chunks[x, y].UpdateChunkMeshData (fullMap, iso, smooth);
-			}
-		}
-
 	}
 
 	void Generate () {
