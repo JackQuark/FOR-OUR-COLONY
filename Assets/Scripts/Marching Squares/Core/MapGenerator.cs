@@ -35,30 +35,134 @@ public class MapGenerator : MonoBehaviour {
 
 	void Start () {
 		Init ();
-		if (loadOnStart) {
-			SaveData loadedData = JsonUtility.FromJson<SaveData> (loadFile.text);
-			for (int y = 0; y < loadedData.height; y++) {
-				for (int x = 0; x < loadedData.width; x++) {
-					fullMap[x, y] = loadedData.map[y * loadedData.width + x];
-				}
-			}
+
+		if (loadOnStart && loadFile != null) {
+			LoadMap (loadFile);
 		} else {
-
 			Generate ();
-
 		}
 
 		DrawChunks ();
-
 	}
 
 	[ContextMenu ("Save")]
 	void Save () {
 		SaveData saveData = new SaveData (fullMap);
-		string saveString = JsonUtility.ToJson (saveData);
-		StreamWriter writer = new StreamWriter ("./Assets/SavedMap/Map.txt");
-		writer.Write (saveString);
-		writer.Close ();
+		string saveString = JsonUtility.ToJson (saveData, true);
+
+		string directoryPath = "./Assets/SavedMap";
+		if (!Directory.Exists (directoryPath)) {
+			Directory.CreateDirectory (directoryPath);
+		}
+
+		string filePath = directoryPath + "/Map.txt";
+
+		using (StreamWriter writer = new StreamWriter (filePath)) {
+			writer.Write (saveString);
+		}
+
+		Debug.Log ("Map saved to: " + filePath);
+	}
+
+	public MapData GetMapData () {
+		if (fullMap == null) {
+			Debug.LogError ("MapGenerator: Map has not been initialized.");
+			return null;
+		}
+
+		return new MapData (fullMap);
+	}
+
+	public bool ApplyMapData (MapData mapData) {
+		if (mapData == null || mapData.values == null) {
+			Debug.LogError ("MapGenerator: Map data is missing.");
+			return false;
+		}
+
+		if (fullMap == null) {
+			Debug.LogError ("MapGenerator: Map has not been initialized.");
+			return false;
+		}
+
+		int expectedWidth = fullMap.GetLength (0);
+		int expectedHeight = fullMap.GetLength (1);
+
+		if (mapData.width != expectedWidth ||
+			mapData.height != expectedHeight) {
+			Debug.LogError (
+				"MapGenerator: Map dimensions do not match. " +
+				"Expected " + expectedWidth + "x" + expectedHeight +
+				", received " + mapData.width + "x" + mapData.height + "."
+			);
+
+			return false;
+		}
+
+		int expectedValueCount = expectedWidth * expectedHeight;
+
+		if (mapData.values.Length != expectedValueCount) {
+			Debug.LogError (
+				"MapGenerator: Map value count does not match dimensions. " +
+				"Expected " + expectedValueCount +
+				", received " + mapData.values.Length + "."
+			);
+
+			return false;
+		}
+
+		for (int y = 0; y < expectedHeight; y++) {
+			for (int x = 0; x < expectedWidth; x++) {
+				fullMap[x, y] = mapData.values[y * expectedWidth + x];
+			}
+		}
+
+		return true;
+	}
+
+	public void RefreshMap () {
+		if (fullMap == null || chunks == null) {
+			Debug.LogError ("MapGenerator: Map has not been initialized.");
+			return;
+		}
+
+		DrawChunks ();
+	}
+
+	public bool LoadMap (TextAsset mapFile) {
+		if (mapFile == null) {
+			Debug.LogError ("MapGenerator: Map file is not assigned.");
+			return false;
+		}
+
+		LevelData levelData =
+			JsonUtility.FromJson<LevelData> (mapFile.text);
+
+		if (levelData != null &&
+			levelData.map != null &&
+			levelData.map.values != null) {
+			return ApplyMapData (levelData.map);
+		}
+
+		SaveData legacyData =
+			JsonUtility.FromJson<SaveData> (mapFile.text);
+
+		if (legacyData.map == null ||
+			legacyData.width <= 0 ||
+			legacyData.height <= 0) {
+			Debug.LogError (
+				"MapGenerator: File is not a valid level or legacy map file."
+			);
+
+			return false;
+		}
+
+		MapData convertedData = new MapData {
+			width = legacyData.width,
+			height = legacyData.height,
+			values = legacyData.map
+		};
+
+		return ApplyMapData (convertedData);
 	}
 
 	void Init () {
@@ -237,6 +341,7 @@ public class MapGenerator : MonoBehaviour {
 			width = map2D.GetLength (0);
 			height = map2D.GetLength (1);
 			map = new float[width * height];
+
 			for (int y = 0; y < height; y++) {
 				for (int x = 0; x < width; x++) {
 					map[y * width + x] = map2D[x, y];
